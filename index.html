@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PB SRD to DevExpress XML Converter</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, sans-serif; padding: 20px; background-color: #f8f9fa; }
+        .container { max-width: 1000px; margin: 0 auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        h2 { margin-top: 0; color: #0056b3; border-bottom: 2px solid #e9ecef; padding-bottom: 15px; }
+        .options-panel { background: #e9ecef; padding: 20px; border-radius: 8px; margin-bottom: 20px; display: flex; gap: 15px; align-items: flex-end; }
+        .option-group { display: flex; flex-direction: column; gap: 5px; }
+        .option-group label { font-size: 0.9em; font-weight: bold; color: #555; }
+        input[type="text"], select { padding: 8px; border: 1px solid #ced4da; border-radius: 4px; height: 38px; box-sizing: border-box; }
+        button { padding: 0 20px; border-radius: 5px; border: none; font-weight: bold; cursor: pointer; height: 38px; white-space: nowrap; transition: all 0.2s; }
+        .btn-select { background-color: #6c757d; color: white; }
+        .btn-download { background-color: #28a745; color: white; }
+        button:disabled { background-color: #ccc !important; cursor: not-allowed; opacity: 0.6; }
+        #dropZone { border: 2px dashed #007bff; border-radius: 10px; padding: 30px; text-align: center; background-color: #f0f7ff; margin-bottom: 20px; cursor: pointer; }
+        textarea { width: 100%; height: 350px; font-family: 'Consolas', monospace; padding: 15px; border: 1px solid #ced4da; border-radius: 5px; resize: vertical; background-color: #fafafa; box-sizing: border-box; }
+        .status-msg { margin: 10px 0; font-weight: bold; font-size: 0.9em; min-height: 20px;}
+        .success { color: #28a745; }
+        .error { color: #dc3545; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h2>PB SRD to DevExpress XML Converter</h2>
+    <div class="options-panel">
+        <div class="option-group">
+            <label>1. 컬럼명 접두어</label>
+            <input type="text" id="colPrefix" value="colList_">
+        </div>
+        <div class="option-group">
+            <label>2. 인코딩</label>
+            <select id="encoding">
+                <option value="EUC-KR" selected>EUC-KR</option>
+                <option value="UTF-8">UTF-8</option>
+            </select>
+        </div>
+        <div class="option-group">
+            <button type="button" class="btn-select" onclick="document.getElementById('fileInput').click()">📁 파일 불러오기</button>
+            <input type="file" id="fileInput" accept=".srd,.sru,.txt" style="display: none;">
+        </div>
+        <div class="option-group">
+            <button type="button" id="downloadBtn" class="btn-download" onclick="downloadXml()" disabled>💾 XML 다운로드</button>
+        </div>
+    </div>
+    <div id="dropZone" onclick="document.getElementById('fileInput').click()">
+        <p>📂 SRD 파일을 여기에 드래그하거나 클릭하여 불러오세요</p>
+    </div>
+    <div class="status-msg" id="statusMsg"></div>
+    <textarea id="outputArea" readonly placeholder="파일을 불러오면 XML이 생성됩니다."></textarea>
+</div>
+
+<script>
+    const fileInput = document.getElementById('fileInput');
+    const outputArea = document.getElementById('outputArea');
+    const statusMsg = document.getElementById('statusMsg');
+    const downloadBtn = document.getElementById('downloadBtn');
+    let generatedXml = "";
+    let originalFileName = "DevExpress_Layout";
+
+    const dropZone = document.getElementById('dropZone');
+    dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.style.backgroundColor = "#cfe2ff"; });
+    dropZone.addEventListener('dragleave', () => { dropZone.style.backgroundColor = "#f0f7ff"; });
+    dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.style.backgroundColor = "#f0f7ff";
+        if (e.dataTransfer.files.length > 0) processFile(e.dataTransfer.files[0]);
+    });
+
+    fileInput.addEventListener('change', (e) => { if (fileInput.files.length > 0) processFile(fileInput.files[0]); });
+
+    function processFile(file) {
+        const encoding = document.getElementById('encoding').value;
+        const reader = new FileReader();
+        
+        // 원본 파일명 저장 (확장자 제외)
+        originalFileName = file.name.replace(/\.[^/.]+$/, "");
+        
+        statusMsg.textContent = "분석 중...";
+        downloadBtn.disabled = true;
+
+        reader.onload = function(e) {
+            try {
+                const content = e.target.result;
+                const columns = parsePBContent(content);
+                if (columns.length === 0) throw new Error("컬럼 정보를 찾지 못했습니다.");
+                
+                generatedXml = generateDevExpressXml(columns);
+                outputArea.value = generatedXml;
+                statusMsg.textContent = `✅ 성공! ${columns.length}개 컬럼 생성 완료.`;
+                statusMsg.className = "status-msg success";
+                downloadBtn.disabled = false;
+            } catch (err) {
+                outputArea.value = "";
+                statusMsg.textContent = "❌ 오류: " + err.message;
+                statusMsg.className = "status-msg error";
+            }
+        };
+        reader.readAsText(file, encoding);
+    }
+
+    function parsePBContent(content) {
+        const columns = [];
+        const parts = content.split(/column\s*=\s*\(/i);
+        for (let i = 1; i < parts.length; i++) {
+            const part = parts[i];
+            const nameMatch = /name\s*=\s*"?([a-zA-Z0-9_#$]+)"?/i.exec(part);
+            if (nameMatch) {
+                columns.push(nameMatch[1].toUpperCase());
+            }
+        }
+        return columns;
+    }
+
+    function generateDevExpressXml(columns) {
+        const prefix = document.getElementById('colPrefix').value;
+        let xml = `<XtraSerializer version="1.0" application="View">
+  <property name="#LayoutVersion" />
+  <property name="BestFitMaxRowCount">-1</property>
+  <property name="PreviewLineCount">-1</property>
+  <property name="HorzScrollStep">3</property>
+  <property name="FocusRectStyle">CellFocus</property>
+  <property name="ScrollStyle">LiveVertScroll, LiveHorzScroll</property>
+  <property name="PreviewIndent">-1</property>
+  <property name="GroupPanelText" />
+  <property name="PreviewFieldName" />
+  <property name="VertScrollTipFieldName" />
+  <property name="LevelIndent">-1</property>
+  <property name="GroupFooterShowMode">VisibleIfExpanded</property>
+  <property name="NewItemRowText" />
+  <property name="SynchronizeClones">true</property>
+  <property name="BorderStyle">Default</property>
+  <property name="ViewCaption" />
+  <property name="DetailHeight">350</property>
+  <property name="Name">gridView1</property>
+  <property name="DetailTabHeaderLocation">Top</property>
+  <property name="ActiveFilterEnabled">true</property>
+  <property name="Columns" iskey="true" value="${columns.length}">\n`;
+
+        columns.forEach((col, index) => {
+            const fullColName = prefix + col;
+            xml += `    <property name="Item${index + 1}" isnull="true" iskey="true">
+      <property name="AppearanceHeader" isnull="true" iskey="true">
+        <property name="Options" isnull="true" iskey="true">
+          <property name="UseTextOptions">true</property>
+          <property name="UseFont">true</property>
+        </property>
+        <property name="TextOptions" isnull="true" iskey="true">
+          <property name="HAlignment">Center</property>
+          <property name="VAlignment">Center</property>
+        </property>
+        <property name="Font">Tahoma, 9pt</property>
+      </property>
+      <property name="AppearanceCell" isnull="true" iskey="true">
+        <property name="Options" isnull="true" iskey="true">
+          <property name="UseFont">true</property>
+        </property>
+        <property name="Font">Tahoma, 9pt</property>
+      </property>
+      <property name="Visible">true</property>
+      <property name="VisibleIndex">${index + 1}</property>
+      <property name="FieldName">${col}</property>
+      <property name="Name">${fullColName}</property>
+      <property name="Caption">${col}</property>
+      <property name="ColumnEditName" />
+    </property>\n`;
+        });
+
+        xml += `  </property>
+  <property name="OptionsView" isnull="true" iskey="true">
+    <property name="ShowViewCaption">false</property>
+    <property name="EnableAppearanceEvenRow">true</property>
+    <property name="ShowGroupPanel">false</property>
+    <property name="ColumnAutoWidth">false</property>
+    <property name="ShowFooter">true</property>
+	<property name="ShowAutoFilterRow">true</property>
+  </property>
+</XtraSerializer>`;
+        return xml;
+    }
+
+    function downloadXml() {
+        if (!generatedXml) return;
+        
+        // 현재 일시 생성 (년월일시분초)
+        const now = new Date();
+        const timestamp = now.getFullYear().toString() +
+                          (now.getMonth() + 1).toString().padStart(2, '0') +
+                          now.getDate().toString().padStart(2, '0') +
+                          now.getHours().toString().padStart(2, '0') +
+                          now.getMinutes().toString().padStart(2, '0') +
+                          now.getSeconds().toString().padStart(2, '0');
+        
+        const fileName = `${originalFileName}_${timestamp}.xml`;
+        
+        const blob = new Blob([generatedXml], { type: "text/xml" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+</script>
+</body>
+</html>
